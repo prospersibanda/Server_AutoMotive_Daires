@@ -35,16 +35,5 @@ router.get('/:id/comments', getComments);
 router.delete('/:id', protect, deleteBlog);
 
 
-const categories = [
-  { id: 1, name: 'Sports Cars' },
-  { id: 2, name: 'Electric Cars' },
-  { id: 3, name: 'Luxury Cars' },
-  { id: 4, name: 'SUV' },
-];
-
-// Fetch all categories
-router.get('/categories', (req, res) => {
-  res.json(categories);
-});
 
 module.exports = router;

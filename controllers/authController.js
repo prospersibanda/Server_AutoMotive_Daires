@@ -48,13 +48,20 @@ exports.login = async (req, res) => {
 
     for (const file of users) {
       const userData = await fs.readJson(path.join(usersDir, file));
+      
       if (userData.email === email) {
         // Compare password with hashed password in the user data
         const isMatch = await bcrypt.compare(password, userData.password);
+        
         if (isMatch) {
           // Generate a JWT token with the user's ID
+          console.log('Logging in user with ID:', userData.id);
           const token = jwt.sign({ id: userData.id }, 'secretkey', { expiresIn: '1h' });
-          return res.json({ token, user: userData });
+          
+          // Remove password from user data before sending it back
+          const { password, ...userWithoutPassword } = userData;
+          
+          return res.json({ token, user: userWithoutPassword });
         }
       }
     }

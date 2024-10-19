@@ -28,7 +28,7 @@ exports.createBlog = async (req, res) => {
 
     // Fetch the author (user) details from req.user
     const userId = req.user; // Assuming req.user contains the authenticated user ID
-    const user = await getUserById(userId); // Fetch user details from the file system or database
+    const user = await getUserById(userId.id); // Fetch user details from the file system or database
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -89,59 +89,92 @@ exports.getAllBlogs = async (req, res) => {
 };
 
 
-// Like a blog post
+// Like or unlike a blog post
 exports.likeBlog = async (req, res) => {
   try {
     const blogId = req.params.id;
     const blogFile = `${blogsDir}/${blogId}.json`;
+    const userId = req.user; // Extracted from the auth middleware
+
+    // Debugging: log the incoming request
+    console.log(`Blog ${blogId} is being liked/unliked by user ${userId}`);
 
     if (await fs.pathExists(blogFile)) {
       const blog = await fs.readJson(blogFile);
-      blog.likes += 1;
+
+      // Ensure blog.likes is an array
+      if (!Array.isArray(blog.likes)) {
+        blog.likes = [];
+      }
+
+      // Check if user has already liked the blog
+      const hasLiked = blog.likes.includes(userId);
+
+      if (hasLiked) {
+        // If the user has already liked it, unlike it
+        blog.likes = blog.likes.filter((id) => id !== userId);
+      } else {
+        // If the user hasn't liked it, add their like
+        blog.likes.push(userId);
+      }
 
       await fs.writeJson(blogFile, blog);
-      res.json({ message: 'Blog liked successfully', likes: blog.likes });
+
+      // Return updated like information
+      res.json({
+        message: hasLiked ? 'Blog unliked successfully' : 'Blog liked successfully',
+        likes: blog.likes.length,
+        userHasLiked: !hasLiked, // Toggle the user's like status
+      });
     } else {
       res.status(404).json({ message: 'Blog not found' });
     }
   } catch (error) {
+    console.error('Error liking blog:', error);
     res.status(500).json({ message: 'Error liking blog', error: error.message });
   }
 };
 
+
+
+
 // Add a comment to a blog post
 exports.addComment = async (req, res) => {
   try {
+    console.log('User making the comment:', req.user); // Check if user is attached
+
     const blogId = req.params.id;
+    console.log('Blog ID:', blogId); // Log the blog ID
+
     const blogFile = `${blogsDir}/${blogId}.json`;
     const { text } = req.body;
-    const userId = req.user; // Extracted from the auth middleware
+    console.log('Comment text:', text); // Log the comment text
+
+    const user = req.user; // Extracted full user object from the auth middleware
 
     if (await fs.pathExists(blogFile)) {
       const blog = await fs.readJson(blogFile);
-      const user = await getUserById(userId);
-
-      if (!user) {
-        return res.status(404).json({ message: 'User not found' });
-      }
 
       const comment = {
         id: Date.now(),
         text,
-        authorName: user.fullname,
-        authorProfilePic: user.profilePic,
+        authorName: user.fullname, // Fullname from the logged-in user
+        authorProfilePic: user.profilePic, // Profile picture from logged-in user
         dateCommented: new Date(),
       };
 
       blog.comments.push(comment);
       await fs.writeJson(blogFile, blog);
 
+      console.log('Comment added successfully:', comment); // Log the added comment
       res.json({ message: 'Comment added successfully', comment });
     } else {
-      res.status(404).json({ message: 'Blog not found' });
+      console.log('Blog not found'); // Log if blog file not found
+      return res.status(404).json({ message: 'Blog not found' });
     }
   } catch (error) {
-    res.status(500).json({ message: 'Error adding comment', error: error.message });
+    console.log('Error adding comment:', error); // Log the error
+    return res.status(500).json({ message: 'Error adding comment', error: error.message });
   }
 };
 
@@ -151,14 +184,17 @@ exports.getComments = async (req, res) => {
     const blogId = req.params.id;
     const blogFile = `${blogsDir}/${blogId}.json`;
 
+    // Ensure blog file exists
     if (await fs.pathExists(blogFile)) {
       const blog = await fs.readJson(blogFile);
+      
+      // Return the blog's comments array
       res.json(blog.comments);
     } else {
-      res.status(404).json({ message: 'Blog not found' });
+      return res.status(404).json({ message: 'Blog not found' });
     }
   } catch (error) {
-    res.status(500).json({ message: 'Error fetching comments', error: error.message });
+    return res.status(500).json({ message: 'Error fetching comments', error: error.message });
   }
 };
 

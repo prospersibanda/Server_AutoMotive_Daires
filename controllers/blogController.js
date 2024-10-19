@@ -96,9 +96,6 @@ exports.likeBlog = async (req, res) => {
     const blogFile = `${blogsDir}/${blogId}.json`;
     const userId = req.user; // Extracted from the auth middleware
 
-    // Debugging: log the incoming request
-    console.log(`Blog ${blogId} is being liked/unliked by user ${userId}`);
-
     if (await fs.pathExists(blogFile)) {
       const blog = await fs.readJson(blogFile);
 
@@ -123,8 +120,8 @@ exports.likeBlog = async (req, res) => {
       // Return updated like information
       res.json({
         message: hasLiked ? 'Blog unliked successfully' : 'Blog liked successfully',
-        likes: blog.likes.length,
-        userHasLiked: !hasLiked, // Toggle the user's like status
+        likes: blog.likes.length,      // Updated number of likes
+        userHasLiked: !hasLiked,       // Reflect the current like status of the user
       });
     } else {
       res.status(404).json({ message: 'Blog not found' });

@@ -1,41 +1,34 @@
-const fs = require('fs-extra');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const path = require('path');
-
-const usersDir = path.join(__dirname, '../data/users');
-const profilePicDir = path.join(__dirname, '../uploads/profilePics');
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const pool = require("../db");
 
 // Signup handler
 exports.signup = async (req, res) => {
   try {
     const { fullname, email, password } = req.body;
-    const profilePic = req.file; // Uploaded image file
+    const profilePic = req.file ? req.file.filename : null;
 
     if (!profilePic) {
-      return res.status(400).json({ message: 'Profile picture is required' });
+      return res.status(400).json({ message: "Profile picture is required" });
     }
 
-    // Hash password before saving
+    // Hash the password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create new user data
-    const newUser = {
-      id: Date.now().toString(), // Use a unique ID based on timestamp
-      fullname,
-      email,
-      password: hashedPassword, // Save hashed password
-      profilePic: profilePic.filename, // Save the profile picture filename
-    };
+    // Insert new user into database
+    const [result] = await pool.query(
+      "INSERT INTO users (fullname, email, password, profilePic) VALUES (?, ?, ?, ?)",
+      [fullname, email, hashedPassword, profilePic]
+    );
 
-    // Save user to a JSON file (e.g., user_123.json)
-    const userFile = path.join(usersDir, `${newUser.id}.json`);
-    await fs.writeJson(userFile, newUser);
-
-    // Respond with success message and user data
-    res.status(201).json({ message: 'User registered successfully', user: newUser });
+    res.status(201).json({
+      message: "User registered successfully",
+      userId: result.insertId,
+    });
   } catch (error) {
-    res.status(500).json({ message: 'Error signing up user', error: error.message });
+    res
+      .status(500)
+      .json({ message: "Error signing up user", error: error.message });
   }
 };
 
@@ -44,31 +37,34 @@ exports.login = async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    const users = await fs.readdir(usersDir);
+    // Fetch user by email
+    const [rows] = await pool.query("SELECT * FROM users WHERE email = ?", [
+      email,
+    ]);
 
-    for (const file of users) {
-      const userData = await fs.readJson(path.join(usersDir, file));
-      
-      if (userData.email === email) {
-        // Compare password with hashed password in the user data
-        const isMatch = await bcrypt.compare(password, userData.password);
-        
-        if (isMatch) {
-          // Generate a JWT token with the user's ID
-          console.log('Logging in user with ID:', userData.id);
-          const token = jwt.sign({ id: userData.id }, 'secretkey', { expiresIn: '1h' });
-          
-          // Remove password from user data before sending it back
-          const { password, ...userWithoutPassword } = userData;
-          
-          return res.json({ token, user: userWithoutPassword });
-        }
-      }
+    if (rows.length === 0) {
+      return res.status(401).json({ message: "Invalid email or password" });
     }
 
-    // If no match found, respond with an error
-    res.status(401).json({ message: 'Invalid email or password' });
+    const user = rows[0];
+
+    // Compare password with hashed password in database
+    const isMatch = await bcrypt.compare(password, user.password);
+
+    if (!isMatch) {
+      return res.status(401).json({ message: "Invalid email or password" });
+    }
+
+    // Generate a JWT token
+    const token = jwt.sign({ id: user.id }, "secretkey", { expiresIn: "1h" });
+
+    // Return user data excluding the password
+    const { password: _, ...userWithoutPassword } = user;
+
+    res.json({ token, user: userWithoutPassword });
   } catch (error) {
-    res.status(500).json({ message: 'Error during login', error: error.message });
+    res
+      .status(500)
+      .json({ message: "Error during login", error: error.message });
   }
 };

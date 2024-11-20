@@ -1,177 +1,118 @@
-const fs = require('fs-extra');
-const path = require('path');
-
-const blogsDir = path.join(__dirname, '../data/blogs');
-const usersDir = path.join(__dirname, '../data/users');
-const blogImageDir = path.join(__dirname, '../uploads/blogImages');
-
-// Helper function to get user by ID
-const getUserById = async (userId) => {
-  const userFile = `${usersDir}/${userId}.json`;
-  if (await fs.pathExists(userFile)) {
-    return await fs.readJson(userFile);
-  }
-  return null;
-};
+const pool = require("../db");
 
 // Create a blog post
 exports.createBlog = async (req, res) => {
   try {
     const { title, description, content, category } = req.body;
-    const blogImage = req.file;
-    const datePosted = new Date();
+    const blogImage = req.file ? req.file.filename : null;
+    const userId = req.user.id; // User ID from auth middleware
 
-    // Ensure content and blogImage exist
     if (!content || !blogImage) {
-      return res.status(400).json({ message: 'Content and image are required' });
+      return res
+        .status(400)
+        .json({ message: "Content and image are required" });
     }
 
-    // Fetch the author (user) details from req.user
-    const userId = req.user; // Assuming req.user contains the authenticated user ID
-    const user = await getUserById(userId.id); // Fetch user details from the file system or database
+    const readTime = Math.ceil(content.split(" ").length / 200); // Estimate read time (200 words/min)
 
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
+    const [result] = await pool.query(
+      "INSERT INTO blogs (title, description, content, category, authorId, blogImage, readTime, datePosted) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())",
+      [title, description, content, category, userId, blogImage, readTime]
+    );
 
-    const readTime = Math.ceil(content.split(' ').length / 200); // 200 words per minute
-
-    const blog = {
-      id: Date.now(),
-      title,
-      description,
-      content,
-      category,
-      author: {
-        name: user.fullname,
-        profilePicture: `${req.protocol}://${req.get('host')}/uploads/profilePics/${user.profilePic}`, // Full URL for the author's profile picture
-      },
-      datePosted,
-      readTime,
-      image: `${req.protocol}://${req.get('host')}/uploads/blogImages/${blogImage.filename}`, // Full URL for the blog image
-      likes: 0,
-      shares: 0,
-      comments: [],
-      bookmarks: [],
-    };
-
-    await fs.writeJson(`${blogsDir}/${blog.id}.json`, blog);
-
-    res.status(201).json({ message: 'Blog created successfully', blog });
+    res
+      .status(201)
+      .json({ message: "Blog created successfully", blogId: result.insertId });
   } catch (error) {
-    res.status(500).json({ message: 'Error creating blog', error: error.message });
+    res
+      .status(500)
+      .json({ message: "Error creating blog", error: error.message });
   }
 };
 
-
-// Get all blogs
 // Get all blogs
 exports.getAllBlogs = async (req, res) => {
   try {
-    console.log("Reading blogs from directory:", blogsDir); // Debugging: Log the directory being read
-    const blogs = await fs.readdir(blogsDir);
-
-    console.log("Blogs found:", blogs); // Debugging: Log the blog filenames found
-
-    const allBlogs = [];
-
-    for (const file of blogs) {
-      const blogData = await fs.readJson(`${blogsDir}/${file}`);
-      console.log("Blog data read from file:", blogData); // Debugging: Log each blog data
-      allBlogs.push(blogData);
-    }
-
-    res.json(allBlogs);
+    const [rows] = await pool.query("SELECT * FROM blogs");
+    res.json(rows);
   } catch (error) {
-    console.error("Error fetching blogs:", error.message); // Debugging: Log any errors
-    res.status(500).json({ message: 'Error fetching blogs', error: error.message });
+    res
+      .status(500)
+      .json({ message: "Error fetching blogs", error: error.message });
   }
 };
 
+// Get trending blogs (e.g., blogs with 100+ likes)
+exports.getTrendingBlogs = async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT blogs.*, COUNT(blog_likes.id) AS likeCount
+       FROM blogs
+       LEFT JOIN blog_likes ON blogs.id = blog_likes.blogId
+       GROUP BY blogs.id
+       HAVING likeCount >= 100`
+    );
+    res.json(rows);
+  } catch (error) {
+    res
+      .status(500)
+      .json({ message: "Error fetching trending blogs", error: error.message });
+  }
+};
 
 // Like or unlike a blog post
 exports.likeBlog = async (req, res) => {
   try {
     const blogId = req.params.id;
-    const blogFile = `${blogsDir}/${blogId}.json`;
-    const userId = req.user; // Extracted from the auth middleware
+    const userId = req.user.id;
 
-    if (await fs.pathExists(blogFile)) {
-      const blog = await fs.readJson(blogFile);
+    const [rows] = await pool.query(
+      "SELECT * FROM blog_likes WHERE blogId = ? AND userId = ?",
+      [blogId, userId]
+    );
 
-      // Ensure blog.likes is an array
-      if (!Array.isArray(blog.likes)) {
-        blog.likes = [];
-      }
-
-      // Check if user has already liked the blog
-      const hasLiked = blog.likes.includes(userId);
-
-      if (hasLiked) {
-        // If the user has already liked it, unlike it
-        blog.likes = blog.likes.filter((id) => id !== userId);
-      } else {
-        // If the user hasn't liked it, add their like
-        blog.likes.push(userId);
-      }
-
-      await fs.writeJson(blogFile, blog);
-
-      // Return updated like information
-      res.json({
-        message: hasLiked ? 'Blog unliked successfully' : 'Blog liked successfully',
-        likes: blog.likes.length,      // Updated number of likes
-        userHasLiked: !hasLiked,       // Reflect the current like status of the user
-      });
+    if (rows.length > 0) {
+      // Unlike the blog
+      await pool.query(
+        "DELETE FROM blog_likes WHERE blogId = ? AND userId = ?",
+        [blogId, userId]
+      );
+      res.json({ message: "Blog unliked successfully" });
     } else {
-      res.status(404).json({ message: 'Blog not found' });
+      // Like the blog
+      await pool.query(
+        "INSERT INTO blog_likes (blogId, userId) VALUES (?, ?)",
+        [blogId, userId]
+      );
+      res.json({ message: "Blog liked successfully" });
     }
   } catch (error) {
-    console.error('Error liking blog:', error);
-    res.status(500).json({ message: 'Error liking blog', error: error.message });
+    res
+      .status(500)
+      .json({ message: "Error liking blog", error: error.message });
   }
 };
-
-
-
 
 // Add a comment to a blog post
 exports.addComment = async (req, res) => {
   try {
-    console.log('User making the comment:', req.user); // Check if user is attached
-
     const blogId = req.params.id;
-    console.log('Blog ID:', blogId); // Log the blog ID
-
-    const blogFile = `${blogsDir}/${blogId}.json`;
     const { text } = req.body;
-    console.log('Comment text:', text); // Log the comment text
+    const userId = req.user.id;
 
-    const user = req.user; // Extracted full user object from the auth middleware
+    const [result] = await pool.query(
+      "INSERT INTO comments (blogId, userId, text, dateCommented) VALUES (?, ?, ?, NOW())",
+      [blogId, userId, text]
+    );
 
-    if (await fs.pathExists(blogFile)) {
-      const blog = await fs.readJson(blogFile);
-
-      const comment = {
-        id: Date.now(),
-        text,
-        authorName: user.fullname, // Fullname from the logged-in user
-        authorProfilePic: user.profilePic, // Profile picture from logged-in user
-        dateCommented: new Date(),
-      };
-
-      blog.comments.push(comment);
-      await fs.writeJson(blogFile, blog);
-
-      console.log('Comment added successfully:', comment); // Log the added comment
-      res.json({ message: 'Comment added successfully', comment });
-    } else {
-      console.log('Blog not found'); // Log if blog file not found
-      return res.status(404).json({ message: 'Blog not found' });
-    }
+    res.json({
+      message: "Comment added successfully",
+      commentId: result.insertId,
+    });
   } catch (error) {
-    console.log('Error adding comment:', error); // Log the error
-    return res.status(500).json({ message: 'Error adding comment', error: error.message });
+    res
+      .status(500)
+      .json({ message: "Error adding comment", error: error.message });
   }
 };
 
@@ -179,19 +120,17 @@ exports.addComment = async (req, res) => {
 exports.getComments = async (req, res) => {
   try {
     const blogId = req.params.id;
-    const blogFile = `${blogsDir}/${blogId}.json`;
 
-    // Ensure blog file exists
-    if (await fs.pathExists(blogFile)) {
-      const blog = await fs.readJson(blogFile);
-      
-      // Return the blog's comments array
-      res.json(blog.comments);
-    } else {
-      return res.status(404).json({ message: 'Blog not found' });
-    }
+    const [rows] = await pool.query(
+      "SELECT comments.*, users.fullname, users.profilePic FROM comments JOIN users ON comments.userId = users.id WHERE blogId = ?",
+      [blogId]
+    );
+
+    res.json(rows);
   } catch (error) {
-    return res.status(500).json({ message: 'Error fetching comments', error: error.message });
+    res
+      .status(500)
+      .json({ message: "Error fetching comments", error: error.message });
   }
 };
 
@@ -199,34 +138,19 @@ exports.getComments = async (req, res) => {
 exports.deleteBlog = async (req, res) => {
   try {
     const blogId = req.params.id;
-    const blogFilePath = `${blogsDir}/${blogId}.json`;
 
-    if (await fs.pathExists(blogFilePath)) {
-      await fs.remove(blogFilePath);
-      res.json({ message: 'Blog deleted successfully' });
-    } else {
-      res.status(404).json({ message: 'Blog not found' });
-    }
-  } catch (error) {
-    res.status(500).json({ message: 'Error deleting blog', error: error.message });
-  }
-};
+    const [result] = await pool.query("DELETE FROM blogs WHERE id = ?", [
+      blogId,
+    ]);
 
-// Get trending blogs (assuming trending blogs have 100+ likes)
-exports.getTrendingBlogs = async (req, res) => {
-  try {
-    const blogs = await fs.readdir(blogsDir);
-    const trendingBlogs = [];
-
-    for (const file of blogs) {
-      const blogData = await fs.readJson(`${blogsDir}/${file}`);
-      if (blogData.likes >= 100) { // Adjust the criteria for trending as needed
-        trendingBlogs.push(blogData);
-      }
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: "Blog not found" });
     }
 
-    res.json(trendingBlogs);
+    res.json({ message: "Blog deleted successfully" });
   } catch (error) {
-    res.status(500).json({ message: 'Error fetching trending blogs', error: error.message });
+    res
+      .status(500)
+      .json({ message: "Error deleting blog", error: error.message });
   }
 };

@@ -1,40 +1,31 @@
-const jwt = require('jsonwebtoken');
-const fs = require('fs-extra');
-const path = require('path');
+const jwt = require("jsonwebtoken");
+const pool = require("../db");
 
-const usersDir = path.join(__dirname, '../data/users');
-
-// Helper to get user data from token
+// Middleware to protect routes and authenticate users
 exports.protect = async (req, res, next) => {
-  console.log('Protect middleware reached'); // This should log on every request
-
   const authHeader = req.headers.authorization;
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    console.log('No token provided or incorrect format'); // Log missing token issue
-    return res.status(401).json({ message: 'Not authorized, no token' });
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ message: "Not authorized, no token" });
   }
 
-  const token = authHeader.split(' ')[1]; // Extract the token
+  const token = authHeader.split(" ")[1];
 
   try {
-    console.log('Verifying token:', token); // Log the token
-    const decoded = jwt.verify(token, 'secretkey'); // Verify token
-    console.log('Token decoded:', decoded); // Log the decoded token
+    const decoded = jwt.verify(token, "secretkey"); // Verify token
 
-    const userFile = `${usersDir}/${decoded.id}.json`;
-    if (await fs.pathExists(userFile)) {
-      const user = await fs.readJson(userFile);
-      req.user = user;
-      console.log('User attached to request:', req.user); // Log the attached user
-      next();
-    } else {
-      console.log('User not found'); // Log if user file not found
-      res.status(401).json({ message: 'User not found' });
+    // Fetch user from database using decoded token ID
+    const [rows] = await pool.query("SELECT * FROM users WHERE id = ?", [
+      decoded.id,
+    ]);
+
+    if (rows.length === 0) {
+      return res.status(401).json({ message: "User not found" });
     }
+
+    req.user = rows[0]; // Attach user to request
+    next();
   } catch (error) {
-    console.log('Token verification failed', error); // Log the error
-    res.status(401).json({ message: 'Invalid token' });
+    res.status(401).json({ message: "Invalid token" });
   }
 };
-
